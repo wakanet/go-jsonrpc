@@ -81,7 +81,7 @@ func rpcError(wf func(func(io.Writer)), req *request, code int, err error) {
 			hw.WriteHeader(500)
 		}
 
-		log.Warnf("rpc error: %s", err)
+		//log.Warnf("rpc error: %s", err)
 
 		if req.ID == nil { // notification
 			return
