@@ -43,13 +43,14 @@ type outChanReg struct {
 
 type wsConn struct {
 	// outside params
-	conn              *websocket.Conn
-	connFactory       func() (*websocket.Conn, error)
-	reconnectInterval time.Duration
-	handler           handlers
-	requests          <-chan clientRequest
-	stop              <-chan struct{}
-	exiting           chan struct{}
+	conn             *websocket.Conn
+	connFactory      func() (*websocket.Conn, error)
+	reconnectBackoff backoff
+	writeTimeout     time.Duration
+	handler          *RPCServer
+	requests         <-chan clientRequest
+	stop             <-chan struct{}
+	exiting          chan struct{}
 
 	// incoming messages
 	incoming    chan io.Reader
@@ -125,6 +126,13 @@ func (c *wsConn) nextWriter(cb func(io.Writer)) {
 func (c *wsConn) sendRequest(req request) error {
 	c.writeLk.Lock()
 	defer c.writeLk.Unlock()
+
+	if c.writeTimeout != 0 {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
+			return err
+		}
+	}
+
 	if err := c.conn.WriteJSON(req); err != nil {
 		return err
 	}
@@ -368,6 +376,11 @@ func (c *wsConn) handleResponse(frame frame) {
 }
 
 func (c *wsConn) handleCall(ctx context.Context, frame frame) {
+	if c.handler == nil {
+		log.Error("handleCall on client")
+		return
+	}
+
 	req := request{
 		Jsonrpc: frame.Jsonrpc,
 		ID:      frame.ID,
@@ -490,13 +503,15 @@ func (c *wsConn) handleWsConn(ctx context.Context) {
 								return
 							}
 
+							attempts := 0
 							var conn *websocket.Conn
 							for conn == nil {
-								time.Sleep(c.reconnectInterval)
+								time.Sleep(c.reconnectBackoff.next(attempts))
 								var err error
 								if conn, err = c.connFactory(); err != nil {
 									log.Debugw("websocket connection retry failed", "error", err)
 								}
+								attempts++
 							}
 
 							c.writeLk.Lock()

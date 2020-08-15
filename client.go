@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	methodRetryFrequency = time.Second * 3
+	methodMinRetryDelay = 100 * time.Millisecond
+	methodMaxRetryDelay = 10 * time.Minute
 )
 
 var (
@@ -73,7 +74,8 @@ func NewClient(addr string, namespace string, handler interface{}, requestHeader
 }
 
 type client struct {
-	namespace string
+	namespace     string
+	paramEncoders map[reflect.Type]ParamEncoder
 
 	requests chan clientRequest
 	exiting  <-chan struct{}
@@ -83,7 +85,7 @@ type client struct {
 // NewMergeClient is like NewClient, but allows to specify multiple structs
 // to be filled in the same namespace, using one connection
 func NewMergeClient(addr string, namespace string, outs []interface{}, requestHeader http.Header, opts ...Option) (ClientCloser, error) {
-	var config Config
+	config := defaultConfig()
 	for _, o := range opts {
 		o(&config)
 	}
@@ -94,6 +96,7 @@ func NewMergeClient(addr string, namespace string, outs []interface{}, requestHe
 	}
 
 	if config.proxyConnFactory != nil {
+		// used in tests
 		connFactory = config.proxyConnFactory(connFactory)
 	}
 
@@ -102,8 +105,13 @@ func NewMergeClient(addr string, namespace string, outs []interface{}, requestHe
 		return nil, err
 	}
 
+	if config.noReconnect {
+		connFactory = nil
+	}
+
 	c := client{
-		namespace: namespace,
+		namespace:     namespace,
+		paramEncoders: config.paramEncoders,
 	}
 
 	stop := make(chan struct{})
@@ -111,15 +119,15 @@ func NewMergeClient(addr string, namespace string, outs []interface{}, requestHe
 	c.requests = make(chan clientRequest)
 	c.exiting = exiting
 
-	handlers := map[string]rpcHandler{}
 	go (&wsConn{
-		conn:              conn,
-		connFactory:       connFactory,
-		reconnectInterval: config.ReconnectInterval,
-		handler:           handlers,
-		requests:          c.requests,
-		stop:              stop,
-		exiting:           exiting,
+		conn:             conn,
+		connFactory:      connFactory,
+		reconnectBackoff: config.reconnectBackoff,
+		writeTimeout:     config.writeTimeout,
+		handler:          nil,
+		requests:         c.requests,
+		stop:             stop,
+		exiting:          exiting,
 	}).handleWsConn(context.TODO())
 
 	for _, handler := range outs {
@@ -344,6 +352,16 @@ func (fn *rpcFunc) handleRpcCall(args []reflect.Value) (results []reflect.Value)
 	id := atomic.AddInt64(&fn.client.idCtr, 1)
 	params := make([]param, len(args)-fn.hasCtx)
 	for i, arg := range args[fn.hasCtx:] {
+		enc, found := fn.client.paramEncoders[arg.Type()]
+		if found {
+			// custom param encoder
+			var err error
+			arg, err = enc(arg)
+			if err != nil {
+				return fn.processError(fmt.Errorf("sendRequest failed: %w", err))
+			}
+		}
+
 		params[i] = param{
 			v: arg,
 		}
@@ -383,11 +401,16 @@ func (fn *rpcFunc) handleRpcCall(args []reflect.Value) (results []reflect.Value)
 		}
 	}
 
+	b := backoff{
+		maxDelay: methodMaxRetryDelay,
+		minDelay: methodMinRetryDelay,
+	}
+
 	var resp clientResponse
 	var err error
 	// keep retrying if got a forced closed websocket conn and calling method
 	// has retry annotation
-	for {
+	for attempt := 0; true; attempt++ {
 		resp, err = fn.client.sendRequest(ctx, req, chCtor)
 		if err != nil {
 			return fn.processError(fmt.Errorf("sendRequest failed: %w", err))
@@ -414,7 +437,8 @@ func (fn *rpcFunc) handleRpcCall(args []reflect.Value) (results []reflect.Value)
 		if !retry {
 			break
 		}
-		time.Sleep(methodRetryFrequency)
+
+		time.Sleep(b.next(attempt))
 	}
 
 	return fn.processResponse(resp, retVal())
