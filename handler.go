@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"reflect"
-	"runtime/debug"
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/tag"
