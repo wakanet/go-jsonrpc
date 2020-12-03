@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/gorilla/websocket"
@@ -18,13 +19,29 @@ const (
 
 // RPCServer provides a jsonrpc 2.0 http server handler
 type RPCServer struct {
-	methods handlers
+	methods        map[string]rpcHandler
+
+	// aliasedMethods contains a map of alias:original method names.
+	// These are used as fallbacks if a method is not found by the given method name.
+	aliasedMethods map[string]string
+
+	paramDecoders map[reflect.Type]ParamDecoder
+
+	maxRequestSize int64
 }
 
 // NewServer creates new RPCServer instance
-func NewServer() *RPCServer {
+func NewServer(opts ...ServerOption) *RPCServer {
+	config := defaultServerConfig()
+	for _, o := range opts {
+		o(&config)
+	}
+
 	return &RPCServer{
-		methods: map[string]rpcHandler{},
+		methods:        map[string]rpcHandler{},
+		aliasedMethods: map[string]string{},
+		paramDecoders:  config.paramDecoders,
+		maxRequestSize: config.maxRequestSize,
 	}
 }
 
@@ -51,7 +68,7 @@ func (s *RPCServer) handleWS(ctx context.Context, w http.ResponseWriter, r *http
 
 	(&wsConn{
 		conn:    c,
-		handler: s.methods,
+		handler: s,
 		exiting: make(chan struct{}),
 	}).handleWsConn(ctx)
 
@@ -71,7 +88,7 @@ func (s *RPCServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.methods.handleReader(ctx, r.Body, w, rpcError)
+	s.handleReader(ctx, r.Body, w, rpcError)
 }
 
 func rpcError(wf func(func(io.Writer)), req *request, code int, err error) {
@@ -108,7 +125,11 @@ func rpcError(wf func(func(io.Writer)), req *request, code int, err error) {
 //
 // Handler is any value with methods defined
 func (s *RPCServer) Register(namespace string, handler interface{}) {
-	s.methods.register(namespace, handler)
+	s.register(namespace, handler)
+}
+
+func (s *RPCServer) AliasMethod(alias, original string) {
+	s.aliasedMethods[alias] = original
 }
 
 var _ error = &respError{}
