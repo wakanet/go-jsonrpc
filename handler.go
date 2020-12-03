@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"runtime/debug"
 
 	"go.opencensus.io/stats"
 	"go.opencensus.io/tag"
@@ -276,12 +277,14 @@ func (s *RPCServer) handle(ctx context.Context, req request, w func(func(io.Writ
 	if handler.errOut != -1 {
 		err := callResult[handler.errOut].Interface()
 		if err != nil {
-			log.Warnf("error in RPC call to '%s': %+v", req.Method, err)
+			//log.Warnf("error in RPC call to '%s': %+v", req.Method, err)
 			stats.Record(ctx, metrics.RPCResponseError.M(1))
 			resp.Error = &respError{
 				Code:    1,
 				Message: err.(error).Error(),
 			}
+			rpcError(w, &req, 0, err.(error))
+			return
 		}
 	}
 
