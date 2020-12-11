@@ -23,11 +23,11 @@ type Config struct {
 func defaultConfig() Config {
 	return Config{
 		reconnectBackoff: backoff{
-			minDelay: 100 * time.Millisecond,
-			maxDelay: 5 * time.Second,
+			minDelay: 1 * time.Second,
+			maxDelay: 10 * time.Second,
 		},
 		pingInterval: 5 * time.Second,
-		timeout:      30 * time.Second,
+		timeout:      60 * time.Second,
 
 		paramEncoders: map[reflect.Type]ParamEncoder{},
 	}
