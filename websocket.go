@@ -500,6 +500,8 @@ func (c *wsConn) setupPings() func() {
 				c.writeLk.Unlock()
 			case <-stop:
 				return
+			case <-c.stop:
+				return
 			}
 		}
 	}()
