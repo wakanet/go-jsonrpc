@@ -192,7 +192,11 @@ func httpClient(ctx context.Context, addr string, namespace string, outs []inter
 
 func websocketClient(ctx context.Context, addr string, namespace string, outs []interface{}, requestHeader http.Header, config Config) (ClientCloser, error) {
 	connFactory := func() (*websocket.Conn, error) {
-		conn, _, err := websocket.DefaultDialer.Dial(addr, requestHeader)
+		dialer := websocket.DefaultDialer
+		dialer.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
+		conn, _, err := dialer.Dial(addr, requestHeader)
 		return conn, err
 	}
 
