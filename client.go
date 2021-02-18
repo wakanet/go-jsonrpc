@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -32,8 +33,11 @@ var (
 
 	log = logging.Logger("rpc")
 
-	 _defaultHTTPClient = &http.Client{
+	_defaultHTTPClient = &http.Client{
 		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, // only protect the correct data transmission.
+			},
 			Proxy: http.ProxyFromEnvironment,
 			DialContext: (&net.Dialer{
 				Timeout:   30 * time.Second,
@@ -188,7 +192,11 @@ func httpClient(ctx context.Context, addr string, namespace string, outs []inter
 
 func websocketClient(ctx context.Context, addr string, namespace string, outs []interface{}, requestHeader http.Header, config Config) (ClientCloser, error) {
 	connFactory := func() (*websocket.Conn, error) {
-		conn, _, err := websocket.DefaultDialer.Dial(addr, requestHeader)
+		dialer := websocket.DefaultDialer
+		dialer.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
+		conn, _, err := dialer.Dial(addr, requestHeader)
 		return conn, err
 	}
 
