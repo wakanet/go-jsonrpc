@@ -73,7 +73,10 @@ func (s *RPCServer) handleWS(ctx context.Context, w http.ResponseWriter, r *http
 	}).handleWsConn(ctx)
 
 	if err := c.Close(); err != nil {
-		log.Error(err)
+		// ignore already closed.
+		if strings.Index(err.Error(), "write: broken pipe") < 0 {
+			log.Error(err)
+		}
 		return
 	}
 }
