@@ -64,7 +64,7 @@ func (e *ErrClient) Error() string {
 }
 
 // Unwrap unwraps the actual error
-func (e *ErrClient) Unwrap(err error) error {
+func (e *ErrClient) Unwrap() error {
 	return e.err
 }
 
@@ -100,6 +100,7 @@ func NewClient(ctx context.Context, addr string, namespace string, handler inter
 type client struct {
 	namespace     string
 	paramEncoders map[reflect.Type]ParamEncoder
+	errors        *Errors
 
 	doRequest func(context.Context, clientRequest) (clientResponse, error)
 	exiting   <-chan struct{}
@@ -134,6 +135,7 @@ func httpClient(ctx context.Context, addr string, namespace string, outs []inter
 	c := client{
 		namespace:     namespace,
 		paramEncoders: config.paramEncoders,
+		errors:        config.errors,
 	}
 
 	stop := make(chan struct{})
@@ -151,7 +153,7 @@ func httpClient(ctx context.Context, addr string, namespace string, outs []inter
 
 		hreq, err := http.NewRequest("POST", addr, bytes.NewReader(b))
 		if err != nil {
-			return clientResponse{}, err
+			return clientResponse{}, &RPCConnectionError{err}
 		}
 
 		hreq.Header = requestHeader.Clone()
@@ -164,7 +166,7 @@ func httpClient(ctx context.Context, addr string, namespace string, outs []inter
 
 		httpResp, err := _defaultHTTPClient.Do(hreq)
 		if err != nil {
-			return clientResponse{}, err
+			return clientResponse{}, &RPCConnectionError{err}
 		}
 		defer httpResp.Body.Close()
 
@@ -198,7 +200,7 @@ func websocketClient(ctx context.Context, addr string, namespace string, outs []
 		}
 		conn, _, err := dialer.Dial(addr, requestHeader)
 		if err != nil {
-			return nil, xerrors.Errorf("cannot dial address %s for %w", addr, err)
+			return nil, &RPCConnectionError{xerrors.Errorf("cannot dial address %s for %w", addr, err)}
 		}
 		return conn, err
 	}
@@ -220,6 +222,7 @@ func websocketClient(ctx context.Context, addr string, namespace string, outs []
 	c := client{
 		namespace:     namespace,
 		paramEncoders: config.paramEncoders,
+		errors:        config.errors,
 	}
 
 	requests := make(chan clientRequest)
@@ -450,7 +453,8 @@ func (fn *rpcFunc) processResponse(resp clientResponse, rval reflect.Value) []re
 	if fn.errOut != -1 {
 		out[fn.errOut] = reflect.New(errorType).Elem()
 		if resp.Error != nil {
-			out[fn.errOut].Set(reflect.ValueOf(resp.Error))
+
+			out[fn.errOut].Set(resp.Error.val(fn.client.errors))
 		}
 	}
 
@@ -556,7 +560,7 @@ func (fn *rpcFunc) handleRpcCall(args []reflect.Value) (results []reflect.Value)
 
 			retVal = func() reflect.Value { return val.Elem() }
 		}
-		retry := resp.Error != nil && resp.Error.Code == 2 && fn.retry
+		retry := resp.Error != nil && resp.Error.Code == eTempWSError && fn.retry
 		if !retry {
 			break
 		}
