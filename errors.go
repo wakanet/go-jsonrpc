@@ -2,6 +2,7 @@ package jsonrpc
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 )
 
@@ -32,7 +33,7 @@ func NewErrors() Errors {
 	return Errors{
 		byType: map[reflect.Type]ErrorCode{},
 		byCode: map[ErrorCode]reflect.Type{
-			-1111111: reflect.TypeOf(&RPCConnectionError{}),
+			-1111111: reflect.TypeOf(&RPCConnectionError{err: errors.New("code:-1111111")}),
 		},
 	}
 }
